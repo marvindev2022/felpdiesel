@@ -11,6 +11,7 @@ import { NovoClientePage } from '@pages/Clientes/Novo'
 import { VeiculosPage } from '@pages/Veiculos'
 import { ChatPage } from '@pages/Chat'
 import { ChatDetailPage } from '@pages/Chat/Detail'
+import { ServicosPage } from '@pages/Servicos'
 import { PortalPage } from '@pages/Portal'
 
 async function requireAuth() {
@@ -44,9 +45,14 @@ export const router = createBrowserRouter([
       { path: 'clientes', element: <ClientesPage /> },
       { path: 'clientes/novo', element: <NovoClientePage /> },
       { path: 'veiculos', element: <VeiculosPage /> },
+      { path: 'servicos', element: <ServicosPage /> },
       { path: 'chat', element: <ChatPage /> },
       { path: 'chat/:id', element: <ChatDetailPage /> },
     ],
+  },
+  {
+    path: '/portal',
+    element: <PortalPage />,
   },
   {
     path: '/portal/:token',

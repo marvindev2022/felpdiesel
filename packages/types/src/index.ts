@@ -68,6 +68,8 @@ export interface OrdemServico {
   status: OsStatus
   km_entrada: number | null
   km_saida: number | null
+  data_entrada: string | null
+  data_saida_real: string | null
   previsao_entrega: string | null
   valor_total: number
   observacoes: string | null

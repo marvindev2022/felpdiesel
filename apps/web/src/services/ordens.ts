@@ -35,11 +35,17 @@ export async function getOrdem(id: string) {
   return data as OrdemServico & { os_itens: OsItem[] }
 }
 
+export async function deleteOrdem(id: string) {
+  const { error } = await supabase.from('ordens_servico').delete().eq('id', id)
+  if (error) throw error
+}
+
 export async function createOrdem(data: {
   cliente_id?: string
   veiculo_id?: string
   titulo: string
   km_entrada?: number
+  data_entrada?: string
   previsao_entrega?: string
   observacoes?: string
 }) {

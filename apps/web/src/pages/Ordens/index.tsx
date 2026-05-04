@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { listOrdens } from '@services/ordens'
 import { formatCurrency, formatDate, osStatusLabel, osStatusColor } from '@lib/format'
 import type { OrdemServico, OsStatus } from '@oficina/types'
@@ -15,6 +15,7 @@ const STATUS_OPTIONS: { value: '' | OsStatus; label: string }[] = [
 ]
 
 export function OrdensPage() {
+  const navigate = useNavigate()
   const [ordens, setOrdens] = useState<OrdemServico[]>([])
   const [filteredOrdens, setFilteredOrdens] = useState<OrdemServico[]>([])
   const [status, setStatus] = useState<'' | OsStatus>('')
@@ -123,17 +124,13 @@ export function OrdensPage() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {filteredOrdens.map((os) => (
-                  <tr key={os.id} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-4 py-3">
-                      <Link to={`/ordens/${os.id}`} className="font-mono font-bold text-amber-600 hover:underline">
-                        #{os.numero}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3">
-                      <Link to={`/ordens/${os.id}`} className="font-medium text-gray-900 hover:text-amber-600">
-                        {os.titulo}
-                      </Link>
-                    </td>
+                  <tr
+                    key={os.id}
+                    onClick={() => navigate(`/ordens/${os.id}`)}
+                    className="hover:bg-amber-50 transition-colors cursor-pointer"
+                  >
+                    <td className="px-4 py-3 font-mono font-bold text-amber-600">#{os.numero}</td>
+                    <td className="px-4 py-3 font-medium text-gray-900">{os.titulo}</td>
                     <td className="hidden px-4 py-3 sm:table-cell text-gray-600">{os.cliente?.name ?? '—'}</td>
                     <td className="hidden px-4 py-3 md:table-cell text-gray-600">
                       {os.veiculo ? `${os.veiculo.placa ?? '—'} · ${os.veiculo.modelo}` : '—'}

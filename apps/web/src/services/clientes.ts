@@ -62,3 +62,17 @@ export async function getPortalData(token: string) {
     ordens: unknown[]
   } | { error: string }
 }
+
+export async function getPortalByCpfPlaca(document: string, placa: string) {
+  const { data, error } = await supabase.rpc('get_portal_by_cpf_placa', {
+    p_document: document.replace(/\D/g, ''),
+    p_placa: placa.replace(/[^A-Za-z0-9]/g, '').toUpperCase(),
+  })
+  if (error) throw error
+  return data as {
+    cliente: Cliente
+    oficina: { id: string; name: string; phone: string | null; address: string | null }
+    veiculos: unknown[]
+    ordens: unknown[]
+  } | { error: string }
+}

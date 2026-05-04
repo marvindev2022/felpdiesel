@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { getPortalData } from '@services/clientes'
+import { getPortalData, getPortalByCpfPlaca } from '@services/clientes'
 import { getOrCreateConversa, listMensagens, sendMessageAsCliente, subscribeToMessages } from '@services/chat'
 import { formatCurrency, formatDate, osStatusLabel, osStatusColor } from '@lib/format'
 import type { Cliente, OrdemServico, OsItem, Avaria, Mensagem, Conversa, Veiculo } from '@oficina/types'
@@ -19,46 +19,46 @@ interface PortalData {
 }
 
 export function PortalPage() {
-  const { token } = useParams<{ token: string }>()
+  const { token } = useParams<{ token?: string }>()
+
+  // Login form (CPF + placa)
+  const [cpf, setCpf] = useState('')
+  const [placa, setPlaca] = useState('')
+  const [loginLoading, setLoginLoading] = useState(false)
+  const [loginError, setLoginError] = useState<string | null>(null)
+
+  // Portal data
   const [data, setData] = useState<PortalData | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
+  const [clienteToken, setClienteToken] = useState<string | null>(null)
+  const [isLoading, setIsLoading] = useState(!!token)
+  const [portalError, setPortalError] = useState<string | null>(null)
+
+  // Chat
   const [conversa, setConversa] = useState<Conversa | null>(null)
   const [mensagens, setMensagens] = useState<Mensagem[]>([])
   const [newMsg, setNewMsg] = useState('')
   const [sending, setSending] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
 
+  // Acesso via token na URL (link legado)
   useEffect(() => {
-    if (!token) { setError('Token inválido.'); setIsLoading(false); return }
+    if (!token) return
     getPortalData(token)
       .then(async (result) => {
-        if ('error' in result) { setError(result.error as string); return }
-        const portalData = result as PortalData
-        setData(portalData)
-        // Buscar/criar conversa do cliente
-        try {
-          // Usar a OS mais recente como contexto da conversa, se existir
-          const osId = portalData.ordens?.[0]?.os?.id
-          const conv = await getOrCreateConversa(portalData.cliente.id, osId)
-          setConversa(conv)
-          const msgs = await listMensagens(conv.id)
-          setMensagens(msgs)
-        } catch {
-          // Conversa falhou silenciosamente — não bloqueia o portal
-        }
+        if ('error' in result) { setPortalError(result.error as string); return }
+        const pd = result as PortalData
+        setData(pd)
+        setClienteToken(pd.cliente.cliente_token)
+        await loadConversa(pd.cliente.id, pd.ordens?.[0]?.os?.id, pd.cliente.cliente_token)
       })
-      .catch(() => setError('Erro ao carregar dados. Verifique o link.'))
+      .catch(() => setPortalError('Erro ao carregar dados.'))
       .finally(() => setIsLoading(false))
   }, [token])
 
   useEffect(() => {
     if (!conversa) return
     const channel = subscribeToMessages(conversa.id, (msg) => {
-      setMensagens((prev) => {
-        if (prev.find((m) => m.id === msg.id)) return prev
-        return [...prev, msg]
-      })
+      setMensagens((prev) => prev.find((m) => m.id === msg.id) ? prev : [...prev, msg])
     })
     return () => { channel.unsubscribe() }
   }, [conversa?.id])
@@ -67,62 +67,176 @@ export function PortalPage() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [mensagens])
 
+  async function loadConversa(clienteId: string, osId: string | undefined, tok: string) {
+    try {
+      const conv = await getOrCreateConversa(clienteId, osId)
+      setConversa(conv)
+      const msgs = await listMensagens(conv.id)
+      setMensagens(msgs)
+    } catch {
+      // chat falha silenciosamente
+    }
+  }
+
+  async function handleLogin(e: React.FormEvent) {
+    e.preventDefault()
+    if (!cpf.trim() || !placa.trim()) return
+    setLoginLoading(true)
+    setLoginError(null)
+    try {
+      const result = await getPortalByCpfPlaca(cpf, placa)
+      if ('error' in result) {
+        setLoginError(result.error as string)
+        return
+      }
+      const pd = result as PortalData
+      setData(pd)
+      setClienteToken(pd.cliente.cliente_token)
+      await loadConversa(pd.cliente.id, pd.ordens?.[0]?.os?.id, pd.cliente.cliente_token)
+    } catch {
+      setLoginError('Erro ao buscar dados. Tente novamente.')
+    } finally {
+      setLoginLoading(false)
+    }
+  }
+
+  function handleLogout() {
+    setData(null)
+    setClienteToken(null)
+    setConversa(null)
+    setMensagens([])
+    setCpf('')
+    setPlaca('')
+    setLoginError(null)
+  }
+
   async function handleSendMsg(e: React.FormEvent) {
     e.preventDefault()
-    if (!token || !conversa || !newMsg.trim()) return
+    if (!clienteToken || !conversa || !newMsg.trim()) return
     setSending(true)
     try {
-      const msg = await sendMessageAsCliente(token, conversa.id, newMsg.trim())
-      setMensagens((prev) => {
-        if (prev.find((m) => m.id === msg.id)) return prev
-        return [...prev, msg]
-      })
+      const msg = await sendMessageAsCliente(clienteToken, conversa.id, newMsg.trim())
+      setMensagens((prev) => prev.find((m) => m.id === msg.id) ? prev : [...prev, msg])
       setNewMsg('')
     } catch {
-      // silencioso no portal
+      // silencioso
     } finally {
       setSending(false)
     }
   }
 
+  // Loading (acesso via token legado)
   if (isLoading) return (
     <div className="flex min-h-screen items-center justify-center bg-gray-50">
       <div className="h-8 w-8 animate-spin rounded-full border-4 border-amber-600 border-t-transparent" />
     </div>
   )
 
-  if (error || !data) return (
+  // Erro de token inválido (legado)
+  if (token && (portalError || !data)) return (
     <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
       <div className="w-full max-w-sm rounded-xl border border-red-200 bg-white p-8 text-center shadow-sm">
         <svg className="mx-auto mb-3 h-10 w-10 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
         </svg>
         <h2 className="text-lg font-semibold text-gray-900">Link inválido</h2>
-        <p className="mt-2 text-sm text-gray-500">{error ?? 'Este link não é válido ou expirou.'}</p>
+        <p className="mt-2 text-sm text-gray-500">{portalError ?? 'Este link não é válido.'}</p>
       </div>
     </div>
   )
 
+  // Tela de login (CPF + placa)
+  if (!data) return (
+    <div className="flex min-h-screen flex-col items-center justify-center bg-gray-50 px-4">
+      <div className="w-full max-w-sm">
+        {/* Logo / marca */}
+        <div className="mb-8 text-center">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-600">
+            <svg className="h-8 w-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </div>
+          <h1 className="text-2xl font-bold text-gray-900">Portal do Cliente</h1>
+          <p className="mt-1 text-sm text-gray-500">Acompanhe sua ordem de serviço</p>
+        </div>
+
+        <form onSubmit={handleLogin} className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm flex flex-col gap-4">
+          <div className="flex flex-col gap-1">
+            <label className="text-sm font-medium text-gray-700">CPF ou CNPJ</label>
+            <input
+              type="text"
+              value={cpf}
+              onChange={(e) => setCpf(e.target.value)}
+              placeholder="000.000.000-00"
+              className="h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+              required
+              autoFocus
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-sm font-medium text-gray-700">Placa do veículo</label>
+            <input
+              type="text"
+              value={placa}
+              onChange={(e) => setPlaca(e.target.value.toUpperCase())}
+              placeholder="ABC-1234 ou ABC1D23"
+              className="h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm font-mono uppercase focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+              required
+            />
+          </div>
+
+          {loginError && (
+            <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-600">
+              {loginError}
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={loginLoading || !cpf.trim() || !placa.trim()}
+            className="h-11 rounded-lg bg-amber-600 text-sm font-semibold text-white hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {loginLoading ? 'Buscando...' : 'Acessar meu portal'}
+          </button>
+        </form>
+
+        <p className="mt-4 text-center text-xs text-gray-400">
+          Use o CPF/CNPJ cadastrado na oficina e a placa do seu veículo
+        </p>
+      </div>
+    </div>
+  )
+
+  // Portal com dados
   const { cliente, oficina, ordens } = data
 
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <header className="bg-amber-600 text-white">
-        <div className="mx-auto max-w-2xl px-4 py-6">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/20">
-              <svg className="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
+        <div className="mx-auto max-w-2xl px-4 py-5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/20">
+                <svg className="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-white/80 text-xs">{oficina.name}</p>
+                <h1 className="text-lg font-bold leading-tight">Olá, {cliente.name.split(' ')[0]}!</h1>
+              </div>
             </div>
-            <div>
-              <p className="text-white/80 text-sm">{oficina.name}</p>
-              <h1 className="text-xl font-bold">Olá, {cliente.name.split(' ')[0]}!</h1>
-            </div>
+            <button
+              onClick={handleLogout}
+              className="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-medium text-white hover:bg-white/20 transition-colors"
+            >
+              Sair
+            </button>
           </div>
-          <p className="mt-2 text-white/70 text-sm">Acompanhe seu veículo em tempo real</p>
+          <p className="mt-2 text-white/70 text-xs">Acompanhe seu veículo em tempo real</p>
         </div>
       </header>
 
@@ -131,7 +245,10 @@ export function PortalPage() {
         {/* Ordens de serviço */}
         {!ordens || ordens.length === 0 ? (
           <div className="rounded-xl border border-gray-200 bg-white p-8 text-center shadow-sm">
-            <p className="text-gray-500">Nenhuma ordem de serviço ativa no momento.</p>
+            <svg className="mx-auto mb-3 h-10 w-10 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+            </svg>
+            <p className="text-gray-500 text-sm">Nenhuma ordem de serviço ativa no momento.</p>
           </div>
         ) : (
           ordens.map(({ os, itens, avarias: avariaList }) => (
@@ -144,16 +261,21 @@ export function PortalPage() {
                       <span className="font-mono text-xs font-bold text-gray-400">#{os.numero}</span>
                       <h2 className="font-semibold text-gray-900">{os.titulo}</h2>
                     </div>
-                    {os.previsao_entrega && (
-                      <p className="mt-0.5 text-xs text-gray-500">Previsão: {formatDate(os.previsao_entrega)}</p>
-                    )}
+                    <div className="mt-1 flex flex-wrap gap-3 text-xs text-gray-500">
+                      {os.data_entrada && <span>Entrada: {formatDate(os.data_entrada)}</span>}
+                      {os.previsao_entrega && <span>Previsão: {formatDate(os.previsao_entrega)}</span>}
+                      {os.data_saida_real && <span className="text-green-600 font-medium">Saída: {formatDate(os.data_saida_real)}</span>}
+                    </div>
                   </div>
                   <span className={`shrink-0 inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${osStatusColor(os.status)}`}>
                     {osStatusLabel(os.status)}
                   </span>
                 </div>
-                {os.km_entrada != null && (
-                  <p className="mt-1 text-xs text-gray-400">KM entrada: {os.km_entrada.toLocaleString()}</p>
+                {(os.km_entrada != null || os.km_saida != null) && (
+                  <div className="mt-2 flex gap-4 text-xs text-gray-400">
+                    {os.km_entrada != null && <span>KM entrada: {os.km_entrada.toLocaleString('pt-BR')}</span>}
+                    {os.km_saida != null && <span>KM saída: {os.km_saida.toLocaleString('pt-BR')}</span>}
+                  </div>
                 )}
               </div>
 
@@ -213,16 +335,14 @@ export function PortalPage() {
             <p className="text-xs text-gray-400 mt-0.5">Tire dúvidas diretamente com a equipe</p>
           </div>
 
-          <div className="flex max-h-64 flex-col gap-2 overflow-y-auto p-4">
+          <div className="flex max-h-72 flex-col gap-2 overflow-y-auto p-4">
             {mensagens.length === 0 ? (
               <p className="py-4 text-center text-sm text-gray-400">Nenhuma mensagem ainda. Diga olá!</p>
             ) : (
               mensagens.map((msg) => (
                 <div key={msg.id} className={`flex ${msg.sender_type === 'cliente' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`flex max-w-xs flex-col gap-0.5 ${msg.sender_type === 'cliente' ? 'items-end' : 'items-start'}`}>
-                    <div className={`rounded-2xl px-4 py-2 text-sm ${msg.sender_type === 'cliente' ? 'rounded-br-sm bg-amber-600 text-white' : 'rounded-bl-sm bg-gray-100 text-gray-900'}`}>
-                      {msg.content}
-                    </div>
+                  <div className={`max-w-xs rounded-2xl px-4 py-2 text-sm ${msg.sender_type === 'cliente' ? 'rounded-br-sm bg-amber-600 text-white' : 'rounded-bl-sm bg-gray-100 text-gray-900'}`}>
+                    {msg.content}
                   </div>
                 </div>
               ))
@@ -242,7 +362,7 @@ export function PortalPage() {
             <button
               type="submit"
               disabled={sending || !newMsg.trim()}
-              className="rounded-lg bg-amber-600 px-4 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="rounded-lg bg-amber-600 px-4 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {sending ? '...' : 'Enviar'}
             </button>
@@ -251,7 +371,7 @@ export function PortalPage() {
 
         {/* Rodapé */}
         <p className="text-center text-xs text-gray-400 pb-4">
-          {oficina.name} {oficina.phone ? `· ${oficina.phone}` : ''} {oficina.address ? `· ${oficina.address}` : ''}
+          {oficina.name}{oficina.phone ? ` · ${oficina.phone}` : ''}{oficina.address ? ` · ${oficina.address}` : ''}
         </p>
       </div>
     </div>

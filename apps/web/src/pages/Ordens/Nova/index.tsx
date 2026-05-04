@@ -15,6 +15,7 @@ export function NovaOrdemPage() {
   const [veiculoId, setVeiculoId] = useState('')
   const [titulo, setTitulo] = useState('')
   const [kmEntrada, setKmEntrada] = useState('')
+  const [dataEntrada, setDataEntrada] = useState(new Date().toISOString().split('T')[0])
   const [previsao, setPrevisao] = useState('')
   const [observacoes, setObservacoes] = useState('')
   const [novoVeiculo, setNovoVeiculo] = useState(false)
@@ -62,6 +63,7 @@ export function NovaOrdemPage() {
         veiculo_id: vidFinal,
         titulo,
         km_entrada: kmEntrada ? Number(kmEntrada) : undefined,
+        data_entrada: dataEntrada || undefined,
         previsao_entrega: previsao || undefined,
         observacoes: observacoes || undefined,
       })
@@ -144,15 +146,18 @@ export function NovaOrdemPage() {
           </div>
         )}
 
-        {/* KM e Previsão */}
+        {/* Datas e KM */}
         <div className="grid grid-cols-2 gap-4">
-          <Input
-            label="KM de Entrada"
-            type="number"
-            value={kmEntrada}
-            onChange={(e) => setKmEntrada(e.target.value)}
-            placeholder="Ex: 85000"
-          />
+          <div className="flex flex-col gap-1">
+            <label className="text-sm font-medium text-gray-700">Data de Entrada *</label>
+            <input
+              type="date"
+              value={dataEntrada}
+              onChange={(e) => setDataEntrada(e.target.value)}
+              className="h-10 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+              required
+            />
+          </div>
           <div className="flex flex-col gap-1">
             <label className="text-sm font-medium text-gray-700">Previsão de Entrega</label>
             <input
@@ -162,6 +167,13 @@ export function NovaOrdemPage() {
               className="h-10 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20"
             />
           </div>
+          <Input
+            label="KM de Entrada"
+            type="number"
+            value={kmEntrada}
+            onChange={(e) => setKmEntrada(e.target.value)}
+            placeholder="Ex: 85000"
+          />
         </div>
 
         {/* Observações */}

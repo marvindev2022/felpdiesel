@@ -19,8 +19,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session)
+    supabase.auth.getSession().then(async ({ data }) => {
+      if (data.session) {
+        const { data: refreshed } = await supabase.auth.refreshSession()
+        setSession(refreshed.session)
+      } else {
+        setSession(null)
+      }
       setIsLoading(false)
     })
 
