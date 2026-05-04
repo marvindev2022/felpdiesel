@@ -1,14 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
+import { supabase } from '@lib/supabase'
 import { getPortalByCpfPlaca } from '@services/clientes'
 import { getOrCreateConversaByToken, sendMessageAsCliente } from '@services/chat'
 import { formatCurrency, formatDate, osStatusLabel, osStatusColor } from '@lib/format'
 import type { Cliente, OrdemServico, OsItem, Avaria, Mensagem, Conversa, Veiculo } from '@oficina/types'
 
-function fmtTime(s: string) {
-  return new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' }).format(new Date(s))
+function fmtTime(s: string | null | undefined): string {
+  if (!s) return ''
+  const d = new Date(s)
+  if (isNaN(d.getTime())) return ''
+  return new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' }).format(d)
 }
-function fmtDateLabel(s: string) {
-  const d = new Date(s), today = new Date(), ontem = new Date(today)
+function fmtDateLabel(s: string | null | undefined): string {
+  if (!s) return 'Sem data'
+  const d = new Date(s)
+  if (isNaN(d.getTime())) return 'Sem data'
+  const today = new Date(), ontem = new Date(today)
   ontem.setDate(today.getDate() - 1)
   if (d.toDateString() === today.toDateString()) return 'Hoje'
   if (d.toDateString() === ontem.toDateString()) return 'Ontem'
@@ -57,24 +64,39 @@ export function PortalPage() {
   const [conversa, setConversa] = useState<Conversa | null>(null)
   const [mensagens, setMensagens] = useState<Mensagem[]>([])
   const [newMsg, setNewMsg] = useState('')
+  const [officinaTyping, setOfficinaTyping] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Polling: anon não recebe realtime (bloqueado por RLS) — refetch a cada 5s
+  // Canal broadcast (funciona sem auth) — real-time bidirecional
   useEffect(() => {
-    if (!conversa || !clienteToken) return
-    const interval = setInterval(async () => {
-      try {
-        const result = await getOrCreateConversaByToken(clienteToken)
-        if (!('error' in result)) setMensagens(result.mensagens ?? [])
-      } catch { /* silencioso */ }
-    }, 5000)
-    return () => clearInterval(interval)
-  }, [conversa?.id, clienteToken])
+    if (!conversa) return
+    const channel = supabase.channel(`chat_${conversa.id}`)
+    channel
+      .on('broadcast', { event: 'new_message' }, ({ payload }) => {
+        const msg = payload as Mensagem
+        if (!msg?.id) return
+        setMensagens((prev) => prev.some((m) => m.id === msg.id) ? prev : [...prev, msg])
+      })
+      .on('broadcast', { event: 'typing' }, ({ payload }) => {
+        if (payload?.sender_type === 'cliente') return
+        setOfficinaTyping(true)
+        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
+        typingTimeoutRef.current = setTimeout(() => setOfficinaTyping(false), 2500)
+      })
+      .subscribe()
+    channelRef.current = channel
+    return () => {
+      supabase.removeChannel(channel)
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
+    }
+  }, [conversa?.id])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [mensagens])
+  }, [mensagens, officinaTyping])
 
   async function loadConversa(_clienteId: string, osId: string | undefined, tok: string) {
     try {
@@ -128,6 +150,7 @@ export function PortalPage() {
     try {
       const msg = await sendMessageAsCliente(clienteToken, conversa.id, content)
       setMensagens((prev) => prev.map((m) => m.id === tempId ? (msg as Mensagem) : m))
+      channelRef.current?.send({ type: 'broadcast', event: 'new_message', payload: msg })
     } catch {
       setMensagens((prev) => prev.filter((m) => m.id !== tempId))
     }
@@ -354,6 +377,15 @@ export function PortalPage() {
                 </div>
               ))
             )}
+            {officinaTyping && (
+              <div className="mb-1 flex justify-start">
+                <div className="flex items-center gap-1 rounded-2xl rounded-bl-sm border border-gray-200 bg-gray-100 px-4 py-2.5">
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400" style={{ animationDelay: '0ms' }} />
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400" style={{ animationDelay: '150ms' }} />
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400" style={{ animationDelay: '300ms' }} />
+                </div>
+              </div>
+            )}
             <div ref={bottomRef} />
           </div>
 
@@ -361,7 +393,10 @@ export function PortalPage() {
             <textarea
               ref={textareaRef}
               value={newMsg}
-              onChange={(e) => setNewMsg(e.target.value)}
+              onChange={(e) => {
+                setNewMsg(e.target.value)
+                channelRef.current?.send({ type: 'broadcast', event: 'typing', payload: { sender_type: 'cliente' } })
+              }}
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMsg() } }}
               placeholder="Mensagem para a oficina... (Enter para enviar)"
               rows={1}

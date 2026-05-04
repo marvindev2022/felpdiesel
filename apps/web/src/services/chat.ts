@@ -25,16 +25,14 @@ export async function getConversa(id: string) {
 }
 
 export async function getOrCreateConversa(cliente_id: string, os_id?: string) {
-  // Tentar achar conversa existente
-  let query = supabase
+  // Busca qualquer conversa do cliente (não filtra por os_id)
+  const { data: existing } = await supabase
     .from('conversas')
     .select('*')
     .eq('cliente_id', cliente_id)
-
-  if (os_id) query = query.eq('os_id', os_id)
-  else query = query.is('os_id', null)
-
-  const { data: existing } = await query.maybeSingle()
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
   if (existing) return existing as Conversa
 
   // Criar nova
@@ -73,10 +71,12 @@ export async function sendMessage(conversa_id: string, content: string, sender_t
   return data as Mensagem
 }
 
-export async function getOrCreateConversaByToken(token: string, osId?: string) {
+export async function getOrCreateConversaByToken(token: string, _osId?: string) {
+  // Sempre passa osId=null para reutilizar a conversa existente do cliente
+  // independente de qual OS foi aberta na staff side
   const { data, error } = await supabase.rpc('get_or_create_conversa_by_token', {
     p_token: token,
-    p_os_id: osId ?? null,
+    p_os_id: null,
   })
   if (error) throw error
   return data as { conversa: Conversa; mensagens: Mensagem[] } | { error: string }

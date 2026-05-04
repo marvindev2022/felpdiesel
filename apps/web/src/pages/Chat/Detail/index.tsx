@@ -107,6 +107,11 @@ export function ChatDetailPage() {
         if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
         typingTimeoutRef.current = setTimeout(() => setOtherTyping(false), 2500)
       })
+      .on('broadcast', { event: 'new_message' }, ({ payload }) => {
+        const incoming = payload as Mensagem
+        if (!incoming?.id) return
+        setMensagens((prev) => prev.some((m) => m.id === incoming.id) ? prev : [...prev, incoming])
+      })
       .subscribe()
 
     channelRef.current = channel
@@ -153,6 +158,7 @@ export function ChatDetailPage() {
 
     if (inserted) {
       setMensagens((prev) => prev.map((m) => m.id === tempId ? inserted : m))
+      channelRef.current?.send({ type: 'broadcast', event: 'new_message', payload: inserted })
     } else if (error) {
       setMensagens((prev) => prev.filter((m) => m.id !== tempId))
     }
