@@ -53,6 +53,8 @@ export function ChatDetailPage() {
   const [text, setText] = useState('')
   const [isSending, setIsSending] = useState(false)
   const [otherTyping, setOtherTyping] = useState(false)
+  const [searchTerm, setSearchTerm] = useState('')
+  const [showSearch, setShowSearch] = useState(false)
 
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -181,7 +183,15 @@ export function ChatDetailPage() {
     <div className="rounded-lg bg-red-50 p-4 text-sm text-red-600">{error ?? 'Conversa não encontrada.'}</div>
   )
 
-  const groups = groupByDate(mensagens)
+  const term = searchTerm.trim().toLowerCase()
+  const filtered = term ? mensagens.filter((m) => m.content.toLowerCase().includes(term)) : mensagens
+  const groups = groupByDate(filtered)
+
+  function highlight(content: string) {
+    if (!term) return <>{content}</>
+    const parts = content.split(new RegExp(`(${term})`, 'gi'))
+    return <>{parts.map((p, i) => p.toLowerCase() === term ? <mark key={i} className="rounded bg-amber-200 text-amber-900">{p}</mark> : p)}</>
+  }
 
   return (
     <div className="flex h-[calc(100vh-7rem)] flex-col md:h-[calc(100vh-5rem)]">
@@ -203,7 +213,32 @@ export function ChatDetailPage() {
             )}
           </p>
         </div>
+        <button
+          onClick={() => { setShowSearch((v) => !v); setSearchTerm('') }}
+          className={`shrink-0 rounded-lg p-1.5 transition-colors ${showSearch ? 'bg-amber-100 text-amber-700' : 'text-gray-400 hover:text-gray-600'}`}
+        >
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
+          </svg>
+        </button>
       </div>
+
+      {showSearch && (
+        <div className="mb-2">
+          <input
+            autoFocus
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Buscar mensagem..."
+            className="w-full rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm placeholder-gray-400 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+          />
+          {term && (
+            <p className="mt-1 text-xs text-gray-400 pl-1">
+              {filtered.length === 0 ? 'Nenhum resultado' : `${filtered.length} mensagem${filtered.length > 1 ? 's' : ''} encontrada${filtered.length > 1 ? 's' : ''}`}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Mensagens */}
       <div className="flex flex-1 flex-col gap-0.5 overflow-y-auto rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
@@ -238,7 +273,7 @@ export function ChatDetailPage() {
                       ? `bg-amber-600 text-white ${radiusMe} ${isTemp ? 'opacity-60' : ''}`
                       : `border border-gray-200 bg-gray-100 text-gray-900 ${radiusOther}`
                     }`}>
-                      <p className="whitespace-pre-wrap break-words text-sm leading-snug">{msg.content}</p>
+                      <p className="whitespace-pre-wrap break-words text-sm leading-snug">{highlight(msg.content)}</p>
                       <p className={`mt-0.5 text-right text-[10px] leading-none ${isMe ? 'text-white/60' : 'text-gray-400'}`}>
                         {formatTime(msg.created_at)}
                       </p>
