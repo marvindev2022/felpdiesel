@@ -1,0 +1,34 @@
+{
+  "name": "@oficina/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "eslint . --max-warnings 0"
+  },
+  "dependencies": {
+    "@hookform/resolvers": "^3.10.0",
+    "@oficina/types": "workspace:*",
+    "@oficina/ui": "workspace:*",
+    "@supabase/supabase-js": "^2.104.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-hook-form": "^7.54.2",
+    "react-router-dom": "^7.1.1",
+    "recharts": "^3.8.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react-swc": "^3.7.2",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.13",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.5"
+  }
+}
