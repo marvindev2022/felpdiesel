@@ -1,5 +1,7 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@contexts/auth'
+import { supabase } from '@lib/supabase'
 import { cn } from '@oficina/ui'
 
 const navItems = [
@@ -71,6 +73,26 @@ const navItems = [
 export function AppLayout() {
   const { user, signOut } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
+  const [unreadChats, setUnreadChats] = useState(0)
+  const onChatRef = useRef(false)
+
+  useEffect(() => {
+    onChatRef.current = location.pathname.startsWith('/chat')
+    if (onChatRef.current) setUnreadChats(0)
+  }, [location.pathname])
+
+  useEffect(() => {
+    const channel = supabase
+      .channel('unread-cliente-msgs')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'mensagens', filter: 'sender_type=eq.cliente' },
+        () => { if (!onChatRef.current) setUnreadChats((n) => n + 1) }
+      )
+      .subscribe()
+    return () => { channel.unsubscribe() }
+  }, [])
 
   async function handleSignOut() {
     await signOut()
@@ -106,7 +128,12 @@ export function AppLayout() {
               {({ isActive }) => (
                 <>
                   {item.icon(isActive)}
-                  {item.label}
+                  <span className="flex-1">{item.label}</span>
+                  {item.to === '/chat' && unreadChats > 0 && (
+                    <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
+                      {unreadChats > 99 ? '99+' : unreadChats}
+                    </span>
+                  )}
                 </>
               )}
             </NavLink>
@@ -167,8 +194,13 @@ export function AppLayout() {
           >
             {({ isActive }) => (
               <>
-                <div className={cn('rounded-lg p-1', isActive && 'bg-amber-600')}>
+                <div className={cn('relative rounded-lg p-1', isActive && 'bg-amber-600')}>
                   {item.icon(isActive)}
+                  {item.to === '/chat' && unreadChats > 0 && (
+                    <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-0.5 text-[9px] font-bold text-white">
+                      {unreadChats > 9 ? '9+' : unreadChats}
+                    </span>
+                  )}
                 </div>
                 {item.label}
               </>

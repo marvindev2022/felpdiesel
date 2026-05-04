@@ -73,6 +73,15 @@ export async function sendMessage(conversa_id: string, content: string, sender_t
   return data as Mensagem
 }
 
+export async function getOrCreateConversaByToken(token: string, osId?: string) {
+  const { data, error } = await supabase.rpc('get_or_create_conversa_by_token', {
+    p_token: token,
+    p_os_id: osId ?? null,
+  })
+  if (error) throw error
+  return data as { conversa: Conversa; mensagens: Mensagem[] } | { error: string }
+}
+
 export async function sendMessageAsCliente(token: string, conversa_id: string, content: string) {
   const { data, error } = await supabase.rpc('send_message_cliente', {
     p_token: token,

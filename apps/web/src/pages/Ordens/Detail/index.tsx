@@ -149,6 +149,10 @@ export function OrdemDetailPage() {
       setOs((prev) => prev ? { ...prev, ...updated } : prev)
       setShowArchiveModal(false)
       notifySuccess('OS finalizada e arquivada!')
+      if (conversa) {
+        const msg = await sendMessage(conversa.id, 'Serviço concluído! Seu veículo está pronto para retirada.', 'staff')
+        setMensagens((prev) => prev.find((m) => m.id === msg.id) ? prev : [...prev, msg])
+      }
     } catch {
       notifyError('Erro ao arquivar OS.')
     } finally {
@@ -175,6 +179,10 @@ export function OrdemDetailPage() {
       const updated = await updateStatus(id, status)
       setOs((prev) => prev ? { ...prev, status: updated.status } : prev)
       notifySuccess(`Status: ${osStatusLabel(status)}`)
+      if (conversa) {
+        const msg = await sendMessage(conversa.id, `Status atualizado: ${osStatusLabel(status)}`, 'staff')
+        setMensagens((prev) => prev.find((m) => m.id === msg.id) ? prev : [...prev, msg])
+      }
     } catch {
       notifyError('Erro ao atualizar status.')
     }

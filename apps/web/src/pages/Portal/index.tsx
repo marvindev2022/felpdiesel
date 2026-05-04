@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { useParams } from 'react-router-dom'
-import { getPortalData, getPortalByCpfPlaca } from '@services/clientes'
-import { getOrCreateConversa, listMensagens, sendMessageAsCliente, subscribeToMessages } from '@services/chat'
+import { getPortalByCpfPlaca } from '@services/clientes'
+
+import { getOrCreateConversaByToken, sendMessageAsCliente, subscribeToMessages } from '@services/chat'
 import { formatCurrency, formatDate, osStatusLabel, osStatusColor } from '@lib/format'
 import type { Cliente, OrdemServico, OsItem, Avaria, Mensagem, Conversa, Veiculo } from '@oficina/types'
 
@@ -19,8 +19,6 @@ interface PortalData {
 }
 
 export function PortalPage() {
-  const { token } = useParams<{ token?: string }>()
-
   // Login form (CPF + placa)
   const [cpf, setCpf] = useState('')
   const [placa, setPlaca] = useState('')
@@ -30,8 +28,6 @@ export function PortalPage() {
   // Portal data
   const [data, setData] = useState<PortalData | null>(null)
   const [clienteToken, setClienteToken] = useState<string | null>(null)
-  const [isLoading, setIsLoading] = useState(!!token)
-  const [portalError, setPortalError] = useState<string | null>(null)
 
   // Chat
   const [conversa, setConversa] = useState<Conversa | null>(null)
@@ -39,21 +35,6 @@ export function PortalPage() {
   const [newMsg, setNewMsg] = useState('')
   const [sending, setSending] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
-
-  // Acesso via token na URL (link legado)
-  useEffect(() => {
-    if (!token) return
-    getPortalData(token)
-      .then(async (result) => {
-        if ('error' in result) { setPortalError(result.error as string); return }
-        const pd = result as PortalData
-        setData(pd)
-        setClienteToken(pd.cliente.cliente_token)
-        await loadConversa(pd.cliente.id, pd.ordens?.[0]?.os?.id, pd.cliente.cliente_token)
-      })
-      .catch(() => setPortalError('Erro ao carregar dados.'))
-      .finally(() => setIsLoading(false))
-  }, [token])
 
   useEffect(() => {
     if (!conversa) return
@@ -67,12 +48,12 @@ export function PortalPage() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [mensagens])
 
-  async function loadConversa(clienteId: string, osId: string | undefined, tok: string) {
+  async function loadConversa(_clienteId: string, osId: string | undefined, tok: string) {
     try {
-      const conv = await getOrCreateConversa(clienteId, osId)
-      setConversa(conv)
-      const msgs = await listMensagens(conv.id)
-      setMensagens(msgs)
+      const result = await getOrCreateConversaByToken(tok, osId)
+      if ('error' in result) return
+      setConversa(result.conversa)
+      setMensagens(result.mensagens ?? [])
     } catch {
       // chat falha silenciosamente
     }
@@ -124,26 +105,6 @@ export function PortalPage() {
       setSending(false)
     }
   }
-
-  // Loading (acesso via token legado)
-  if (isLoading) return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-50">
-      <div className="h-8 w-8 animate-spin rounded-full border-4 border-amber-600 border-t-transparent" />
-    </div>
-  )
-
-  // Erro de token inválido (legado)
-  if (token && (portalError || !data)) return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
-      <div className="w-full max-w-sm rounded-xl border border-red-200 bg-white p-8 text-center shadow-sm">
-        <svg className="mx-auto mb-3 h-10 w-10 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-        </svg>
-        <h2 className="text-lg font-semibold text-gray-900">Link inválido</h2>
-        <p className="mt-2 text-sm text-gray-500">{portalError ?? 'Este link não é válido.'}</p>
-      </div>
-    </div>
-  )
 
   // Tela de login (CPF + placa)
   if (!data) return (
