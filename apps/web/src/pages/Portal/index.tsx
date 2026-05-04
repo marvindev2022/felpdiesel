@@ -78,6 +78,10 @@ export function PortalPage() {
       .on('broadcast', { event: 'new_message' }, ({ payload }) => {
         const msg = payload as Mensagem
         if (!msg?.id) return
+        if (msg.sender_type === 'staff') {
+          setOfficinaTyping(false)
+          if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
+        }
         setMensagens((prev) => prev.some((m) => m.id === msg.id) ? prev : [...prev, msg])
       })
       .on('broadcast', { event: 'typing' }, ({ payload }) => {

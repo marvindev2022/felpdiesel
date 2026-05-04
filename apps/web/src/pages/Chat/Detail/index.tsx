@@ -112,6 +112,10 @@ export function ChatDetailPage() {
       .on('broadcast', { event: 'new_message' }, ({ payload }) => {
         const incoming = payload as Mensagem
         if (!incoming?.id) return
+        if (incoming.sender_type === 'cliente') {
+          setOtherTyping(false)
+          if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
+        }
         setMensagens((prev) => prev.some((m) => m.id === incoming.id) ? prev : [...prev, incoming])
       })
       .subscribe()
