@@ -1,19 +1,47 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { getOrdem, updateOrdem, updateStatus, deleteOrdem, addItem, removeItem } from '@services/ordens'
 import { listServicos } from '@services/servicos'
 import { listAvarias, createAvaria, deleteAvaria, uploadFoto, getFotoUrl } from '@services/avarias'
-import { getOrCreateConversa, listMensagens, sendMessage, subscribeToMessages } from '@services/chat'
+import { getOrCreateConversa } from '@services/chat'
+import { supabase } from '@lib/supabase'
+import { useAuth } from '@contexts/auth'
 import { formatCurrency, formatDate, osStatusLabel, osStatusColor } from '@lib/format'
 import { notifySuccess, notifyError } from '@components/Toast'
 import { Button, Badge, Input } from '@oficina/ui'
 import type { OrdemServico, OsItem, Avaria, Mensagem, Conversa, OsStatus } from '@oficina/types'
+
+function formatTime(dateStr: string) {
+  return new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' }).format(new Date(dateStr))
+}
+function formatDateLabel(dateStr: string) {
+  const d = new Date(dateStr), today = new Date(), yesterday = new Date(today)
+  yesterday.setDate(today.getDate() - 1)
+  if (d.toDateString() === today.toDateString()) return 'Hoje'
+  if (d.toDateString() === yesterday.toDateString()) return 'Ontem'
+  return new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'long' }).format(d)
+}
+function groupByDate(msgs: Mensagem[]) {
+  const groups: { label: string; msgs: Mensagem[] }[] = []
+  let cur = ''
+  for (const m of msgs) {
+    const label = formatDateLabel(m.created_at)
+    if (label !== cur) { groups.push({ label, msgs: [m] }); cur = label }
+    else groups[groups.length - 1].msgs.push(m)
+  }
+  return groups
+}
+function sameCluster(a: Mensagem, b: Mensagem) {
+  if (a.sender_type !== b.sender_type) return false
+  return Math.abs(new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) < 2 * 60 * 1000
+}
 
 const OS_STATUSES: OsStatus[] = ['aberta', 'em_andamento', 'aguardando_peca', 'pronta', 'entregue', 'cancelada']
 
 export function OrdemDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const { user } = useAuth()
   const [os, setOs] = useState<OrdemServico & { os_itens?: OsItem[] } | null>(null)
   const [avarias, setAvarias] = useState<Avaria[]>([])
   const [conversa, setConversa] = useState<Conversa | null>(null)
@@ -25,7 +53,8 @@ export function OrdemDetailPage() {
   const [showItemModal, setShowItemModal] = useState(false)
   const [showAvariaModal, setShowAvariaModal] = useState(false)
   const [newMsg, setNewMsg] = useState('')
-  const [sendingMsg, setSendingMsg] = useState(false)
+  const chatChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
+  const chatBottomRef = useRef<HTMLDivElement>(null)
 
   // Modais novos
   const [showEditModal, setShowEditModal] = useState(false)
@@ -69,8 +98,12 @@ export function OrdemDetailPage() {
         if (osData.cliente_id) {
           const conv = await getOrCreateConversa(osData.cliente_id, id)
           setConversa(conv)
-          const msgs = await listMensagens(conv.id)
-          setMensagens(msgs)
+          const { data: msgs } = await supabase
+            .from('mensagens')
+            .select('id, sender_id, sender_type, content, created_at')
+            .eq('conversa_id', conv.id)
+            .order('created_at', { ascending: true })
+          setMensagens((msgs ?? []) as Mensagem[])
         }
       })
       .catch(() => setError('Erro ao carregar ordem de serviço.'))
@@ -79,11 +112,23 @@ export function OrdemDetailPage() {
 
   useEffect(() => {
     if (!conversa) return
-    const channel = subscribeToMessages(conversa.id, (msg) => {
-      setMensagens((prev) => [...prev, msg])
-    })
-    return () => { channel.unsubscribe() }
+    const channel = supabase
+      .channel(`os_chat_${conversa.id}`)
+      .on('postgres_changes', {
+        event: 'INSERT', schema: 'public', table: 'mensagens',
+        filter: `conversa_id=eq.${conversa.id}`,
+      }, (payload) => {
+        const msg = payload.new as Mensagem
+        setMensagens((prev) => prev.some((m) => m.id === msg.id) ? prev : [...prev, msg])
+      })
+      .subscribe()
+    chatChannelRef.current = channel
+    return () => { supabase.removeChannel(channel) }
   }, [conversa?.id])
+
+  useEffect(() => {
+    chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [mensagens])
 
   useEffect(() => {
     if (showItemModal && itemForm.tipo === 'servico') {
@@ -149,10 +194,7 @@ export function OrdemDetailPage() {
       setOs((prev) => prev ? { ...prev, ...updated } : prev)
       setShowArchiveModal(false)
       notifySuccess('OS finalizada e arquivada!')
-      if (conversa) {
-        const msg = await sendMessage(conversa.id, 'Serviço concluído! Seu veículo está pronto para retirada.', 'staff')
-        setMensagens((prev) => prev.find((m) => m.id === msg.id) ? prev : [...prev, msg])
-      }
+      await enviarNotificacaoChat('Serviço concluído! Seu veículo está pronto para retirada.')
     } catch {
       notifyError('Erro ao arquivar OS.')
     } finally {
@@ -179,10 +221,7 @@ export function OrdemDetailPage() {
       const updated = await updateStatus(id, status)
       setOs((prev) => prev ? { ...prev, status: updated.status } : prev)
       notifySuccess(`Status: ${osStatusLabel(status)}`)
-      if (conversa) {
-        const msg = await sendMessage(conversa.id, `Status atualizado: ${osStatusLabel(status)}`, 'staff')
-        setMensagens((prev) => prev.find((m) => m.id === msg.id) ? prev : [...prev, msg])
-      }
+      await enviarNotificacaoChat(`Status atualizado: ${osStatusLabel(status)}`)
     } catch {
       notifyError('Erro ao atualizar status.')
     }
@@ -267,19 +306,30 @@ export function OrdemDetailPage() {
     }
   }
 
-  async function handleSendMsg(e: React.FormEvent) {
-    e.preventDefault()
+  async function handleSendMsg(e?: React.FormEvent) {
+    e?.preventDefault()
     if (!conversa || !newMsg.trim()) return
-    setSendingMsg(true)
-    try {
-      const msg = await sendMessage(conversa.id, newMsg.trim(), 'staff')
-      setMensagens((prev) => [...prev, msg])
-      setNewMsg('')
-    } catch {
-      notifyError('Erro ao enviar mensagem.')
-    } finally {
-      setSendingMsg(false)
-    }
+    const content = newMsg.trim()
+    setNewMsg('')
+    const tempId = `temp-${Date.now()}`
+    setMensagens((prev) => [...prev, { id: tempId, sender_id: user?.id ?? null, sender_type: 'staff', content, created_at: new Date().toISOString() } as Mensagem])
+    const { data: inserted, error } = await supabase
+      .from('mensagens')
+      .insert({ conversa_id: conversa.id, sender_id: user?.id ?? null, sender_type: 'staff', content })
+      .select('id, sender_id, sender_type, content, created_at')
+      .single()
+    if (inserted) setMensagens((prev) => prev.map((m) => m.id === tempId ? inserted as Mensagem : m))
+    else if (error) { setMensagens((prev) => prev.filter((m) => m.id !== tempId)); notifyError('Erro ao enviar mensagem.') }
+  }
+
+  async function enviarNotificacaoChat(content: string) {
+    if (!conversa) return
+    const { data: inserted } = await supabase
+      .from('mensagens')
+      .insert({ conversa_id: conversa.id, sender_id: null, sender_type: 'staff', content })
+      .select('id, sender_id, sender_type, content, created_at')
+      .single()
+    if (inserted) setMensagens((prev) => prev.find((m) => m.id === (inserted as Mensagem).id) ? prev : [...prev, inserted as Mensagem])
   }
 
   const inputCls = 'h-10 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20'
@@ -470,39 +520,65 @@ export function OrdemDetailPage() {
       </div>
 
       {/* Chat */}
-      <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
+      <div className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
         <div className="border-b border-gray-100 px-6 py-4">
           <h2 className="font-semibold text-gray-900">Chat com o Cliente</h2>
-          {!os.cliente_id && (
-            <p className="text-xs text-gray-400 mt-1">Associe um cliente para habilitar o chat.</p>
-          )}
+          {!os.cliente_id && <p className="mt-1 text-xs text-gray-400">Associe um cliente para habilitar o chat.</p>}
         </div>
         {os.cliente_id && (
           <>
-            <div className="flex max-h-64 flex-col gap-2 overflow-y-auto p-4">
+            <div className="flex max-h-72 flex-col gap-0.5 overflow-y-auto p-4">
               {mensagens.length === 0 ? (
                 <p className="py-4 text-center text-sm text-gray-400">Nenhuma mensagem ainda.</p>
               ) : (
-                mensagens.map((msg) => (
-                  <div key={msg.id} className={`flex ${msg.sender_type === 'staff' ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-xs rounded-2xl px-4 py-2 text-sm ${msg.sender_type === 'staff' ? 'bg-amber-600 text-white' : 'bg-gray-100 text-gray-900'}`}>
-                      {msg.content}
+                groupByDate(mensagens).map((group) => (
+                  <div key={group.label} className="flex flex-col gap-0.5">
+                    <div className="my-2 flex justify-center">
+                      <span className="rounded-full border border-gray-200 bg-gray-50 px-3 py-0.5 text-xs text-gray-400">{group.label}</span>
                     </div>
+                    {group.msgs.map((msg, idx) => {
+                      const isMe = msg.sender_type === 'staff'
+                      const prev = group.msgs[idx - 1]
+                      const next = group.msgs[idx + 1]
+                      const isFirst = !prev || !sameCluster(prev, msg)
+                      const isLast = !next || !sameCluster(msg, next)
+                      const isTemp = msg.id.startsWith('temp-')
+                      const rMe = ['rounded-2xl', !isFirst ? 'rounded-tr-md' : '', isLast ? 'rounded-br-sm' : 'rounded-br-md'].filter(Boolean).join(' ')
+                      const rOther = ['rounded-2xl', !isFirst ? 'rounded-tl-md' : '', isLast ? 'rounded-bl-sm' : 'rounded-bl-md'].filter(Boolean).join(' ')
+                      return (
+                        <div key={msg.id} className={`flex ${isMe ? 'justify-end' : 'justify-start'} ${!isLast ? 'mb-0' : 'mb-1'}`}>
+                          <div className={`max-w-[75%] px-3 py-2 text-sm ${isMe ? `bg-amber-600 text-white ${rMe} ${isTemp ? 'opacity-60' : ''}` : `border border-gray-200 bg-gray-100 text-gray-900 ${rOther}`}`}>
+                            <p className="whitespace-pre-wrap break-words leading-snug">{msg.content}</p>
+                            <p className={`mt-0.5 text-right text-[10px] leading-none ${isMe ? 'text-white/60' : 'text-gray-400'}`}>{formatTime(msg.created_at)}</p>
+                          </div>
+                        </div>
+                      )
+                    })}
                   </div>
                 ))
               )}
+              <div ref={chatBottomRef} />
             </div>
-            <form onSubmit={handleSendMsg} className="flex gap-2 border-t border-gray-100 p-4">
-              <input
-                type="text"
+            <div className="flex items-end gap-2 border-t border-gray-100 p-4">
+              <textarea
                 value={newMsg}
                 onChange={(e) => setNewMsg(e.target.value)}
-                placeholder="Mensagem para o cliente..."
-                className={`${inputCls} flex-1`}
-                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMsg(e) } }}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMsg() } }}
+                placeholder="Mensagem para o cliente... (Enter para enviar)"
+                rows={1}
+                className="flex-1 resize-none rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm placeholder-gray-400 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+                style={{ maxHeight: '6rem', overflowY: newMsg.split('\n').length > 2 ? 'auto' : 'hidden' }}
               />
-              <Button type="submit" isLoading={sendingMsg} disabled={!newMsg.trim()} size="md">Enviar</Button>
-            </form>
+              <button
+                onClick={() => handleSendMsg()}
+                disabled={!newMsg.trim()}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-40 transition-opacity"
+              >
+                <svg className="h-4 w-4 -rotate-90 translate-x-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19V5M5 12l7-7 7 7" />
+                </svg>
+              </button>
+            </div>
           </>
         )}
       </div>

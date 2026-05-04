@@ -1,9 +1,33 @@
 import { useEffect, useRef, useState } from 'react'
 import { getPortalByCpfPlaca } from '@services/clientes'
-
-import { getOrCreateConversaByToken, sendMessageAsCliente, subscribeToMessages } from '@services/chat'
+import { getOrCreateConversaByToken, sendMessageAsCliente } from '@services/chat'
 import { formatCurrency, formatDate, osStatusLabel, osStatusColor } from '@lib/format'
 import type { Cliente, OrdemServico, OsItem, Avaria, Mensagem, Conversa, Veiculo } from '@oficina/types'
+
+function fmtTime(s: string) {
+  return new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' }).format(new Date(s))
+}
+function fmtDateLabel(s: string) {
+  const d = new Date(s), today = new Date(), ontem = new Date(today)
+  ontem.setDate(today.getDate() - 1)
+  if (d.toDateString() === today.toDateString()) return 'Hoje'
+  if (d.toDateString() === ontem.toDateString()) return 'Ontem'
+  return new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'long' }).format(d)
+}
+function groupMsgs(msgs: Mensagem[]) {
+  const groups: { label: string; msgs: Mensagem[] }[] = []
+  let cur = ''
+  for (const m of msgs) {
+    const label = fmtDateLabel(m.created_at)
+    if (label !== cur) { groups.push({ label, msgs: [m] }); cur = label }
+    else groups[groups.length - 1].msgs.push(m)
+  }
+  return groups
+}
+function isSameCluster(a: Mensagem, b: Mensagem) {
+  if (a.sender_type !== b.sender_type) return false
+  return Math.abs(new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) < 2 * 60 * 1000
+}
 
 interface PortalOsEntry {
   os: OrdemServico
@@ -33,16 +57,20 @@ export function PortalPage() {
   const [conversa, setConversa] = useState<Conversa | null>(null)
   const [mensagens, setMensagens] = useState<Mensagem[]>([])
   const [newMsg, setNewMsg] = useState('')
-  const [sending, setSending] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
 
+  // Polling: anon não recebe realtime (bloqueado por RLS) — refetch a cada 5s
   useEffect(() => {
-    if (!conversa) return
-    const channel = subscribeToMessages(conversa.id, (msg) => {
-      setMensagens((prev) => prev.find((m) => m.id === msg.id) ? prev : [...prev, msg])
-    })
-    return () => { channel.unsubscribe() }
-  }, [conversa?.id])
+    if (!conversa || !clienteToken) return
+    const interval = setInterval(async () => {
+      try {
+        const result = await getOrCreateConversaByToken(clienteToken)
+        if (!('error' in result)) setMensagens(result.mensagens ?? [])
+      } catch { /* silencioso */ }
+    }, 5000)
+    return () => clearInterval(interval)
+  }, [conversa?.id, clienteToken])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -91,19 +119,19 @@ export function PortalPage() {
     setLoginError(null)
   }
 
-  async function handleSendMsg(e: React.FormEvent) {
-    e.preventDefault()
+  async function handleSendMsg() {
     if (!clienteToken || !conversa || !newMsg.trim()) return
-    setSending(true)
+    const content = newMsg.trim()
+    setNewMsg('')
+    const tempId = `temp-${Date.now()}`
+    setMensagens((prev) => [...prev, { id: tempId, sender_id: null, sender_type: 'cliente', content, created_at: new Date().toISOString() } as Mensagem])
     try {
-      const msg = await sendMessageAsCliente(clienteToken, conversa.id, newMsg.trim())
-      setMensagens((prev) => prev.find((m) => m.id === msg.id) ? prev : [...prev, msg])
-      setNewMsg('')
+      const msg = await sendMessageAsCliente(clienteToken, conversa.id, content)
+      setMensagens((prev) => prev.map((m) => m.id === tempId ? (msg as Mensagem) : m))
     } catch {
-      // silencioso
-    } finally {
-      setSending(false)
+      setMensagens((prev) => prev.filter((m) => m.id !== tempId))
     }
+    textareaRef.current?.focus()
   }
 
   // Tela de login (CPF + placa)
@@ -296,38 +324,60 @@ export function PortalPage() {
             <p className="text-xs text-gray-400 mt-0.5">Tire dúvidas diretamente com a equipe</p>
           </div>
 
-          <div className="flex max-h-72 flex-col gap-2 overflow-y-auto p-4">
+          <div className="flex max-h-72 flex-col gap-0.5 overflow-y-auto p-4">
             {mensagens.length === 0 ? (
               <p className="py-4 text-center text-sm text-gray-400">Nenhuma mensagem ainda. Diga olá!</p>
             ) : (
-              mensagens.map((msg) => (
-                <div key={msg.id} className={`flex ${msg.sender_type === 'cliente' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-xs rounded-2xl px-4 py-2 text-sm ${msg.sender_type === 'cliente' ? 'rounded-br-sm bg-amber-600 text-white' : 'rounded-bl-sm bg-gray-100 text-gray-900'}`}>
-                    {msg.content}
+              groupMsgs(mensagens).map((group) => (
+                <div key={group.label} className="flex flex-col gap-0.5">
+                  <div className="my-2 flex justify-center">
+                    <span className="rounded-full border border-gray-200 bg-gray-50 px-3 py-0.5 text-xs text-gray-400">{group.label}</span>
                   </div>
+                  {group.msgs.map((msg, idx) => {
+                    const isMe = msg.sender_type === 'cliente'
+                    const prev = group.msgs[idx - 1]
+                    const next = group.msgs[idx + 1]
+                    const isFirst = !prev || !isSameCluster(prev, msg)
+                    const isLast = !next || !isSameCluster(msg, next)
+                    const isTemp = msg.id.startsWith('temp-')
+                    const rMe = ['rounded-2xl', !isFirst ? 'rounded-tr-md' : '', isLast ? 'rounded-br-sm' : 'rounded-br-md'].filter(Boolean).join(' ')
+                    const rOther = ['rounded-2xl', !isFirst ? 'rounded-tl-md' : '', isLast ? 'rounded-bl-sm' : 'rounded-bl-md'].filter(Boolean).join(' ')
+                    return (
+                      <div key={msg.id} className={`flex ${isMe ? 'justify-end' : 'justify-start'} ${!isLast ? 'mb-0' : 'mb-1'}`}>
+                        <div className={`max-w-[75%] px-3 py-2 text-sm ${isMe ? `bg-amber-600 text-white ${rMe} ${isTemp ? 'opacity-60' : ''}` : `border border-gray-200 bg-gray-100 text-gray-900 ${rOther}`}`}>
+                          <p className="whitespace-pre-wrap break-words leading-snug">{msg.content}</p>
+                          <p className={`mt-0.5 text-right text-[10px] leading-none ${isMe ? 'text-white/60' : 'text-gray-400'}`}>{fmtTime(msg.created_at)}</p>
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
               ))
             )}
             <div ref={bottomRef} />
           </div>
 
-          <form onSubmit={handleSendMsg} className="flex gap-2 border-t border-gray-100 p-4">
-            <input
-              type="text"
+          <div className="flex items-end gap-2 border-t border-gray-100 p-4">
+            <textarea
+              ref={textareaRef}
               value={newMsg}
               onChange={(e) => setNewMsg(e.target.value)}
-              placeholder="Mensagem para a oficina..."
-              className="h-10 flex-1 rounded-lg border border-gray-300 px-3 text-sm focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20"
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMsg(e) } }}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMsg() } }}
+              placeholder="Mensagem para a oficina... (Enter para enviar)"
+              rows={1}
+              className="flex-1 resize-none rounded-xl border border-gray-300 bg-white px-3 py-2.5 text-sm placeholder-gray-400 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+              style={{ maxHeight: '6rem', overflowY: newMsg.split('\n').length > 2 ? 'auto' : 'hidden' }}
             />
             <button
-              type="submit"
-              disabled={sending || !newMsg.trim()}
-              className="rounded-lg bg-amber-600 px-4 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              onClick={handleSendMsg}
+              disabled={!newMsg.trim()}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-40 transition-opacity"
             >
-              {sending ? '...' : 'Enviar'}
+              <svg className="h-4 w-4 -rotate-90 translate-x-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19V5M5 12l7-7 7 7" />
+              </svg>
             </button>
-          </form>
+          </div>
         </div>
 
         {/* Rodapé */}
